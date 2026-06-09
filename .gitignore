@@ -154,3 +154,15 @@ uv.lock
 
 # alarm.yml outputs
 outputs/
+
+# === Local dev: docker-genesis PoC / render outputs (not source) ===
+docker-genesis/poc_out/
+docker-genesis/poc_out_f45/
+docker-genesis/poc_stable/
+docker-genesis/poc_topple/
+docker-genesis/preview_platform_out/
+docker-genesis/preview_topple/
+docker-genesis/render_out/
+
+# Nested genesis-nyx checkout has its own .git + unreadable cache; tracked separately
+genesis-nyx/

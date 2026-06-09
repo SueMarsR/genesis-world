@@ -464,6 +464,11 @@ class RigidSolver(KinematicSolver):
         # Prefer the monolith solver on CPU (always faster there, perf dispatch is a waste of effort)
         if gs.backend == gs.cpu or self.sim.options.requires_grad:
             static_rigid_sim_config["prefer_decomposed_solver"] = 0
+        # Local workaround: force monolith path on this host. The decomposed path uses
+        # qd.graph_do_while which loads a pre-compiled SM-specific fatbin; on this driver/SM90
+        # combo cuModuleLoadFatBinary returns CUDA_ERROR_INVALID_SOURCE (200). Disable via env.
+        elif os.environ.get("GENESIS_FORCE_MONOLITH_SOLVER", "") == "1":
+            static_rigid_sim_config["prefer_decomposed_solver"] = 0
 
         if self.is_active:
             # The tiled and cooperative Cholesky kernels trade per-env serial work for cross-lane parallelism, so they

@@ -1,0 +1,61 @@
+# syntax=docker/dockerfile:1
+# Toolchain image for building LuisaRender (the EGL-free, CUDA path-traced renderer
+# behind gs.renderers.RayTracer). Based on the working genesis-dev image; adds the
+# C++/CUDA/Rust build toolchain from the official docker/build_luisa.sh recipe.
+#
+# Domestic (China) mirrors are configured throughout (apt/pip/rustup/cargo) because
+# the host's international egress is slow — the first toolchain build timed out at
+# 30 min stuck on the rustup download from the international CDN.
+#
+# Build artifacts go to the MOUNTED checkout (genesis/ext/LuisaRender/build/bin),
+# so they persist on the host and are picked up by genesis at runtime. Compile via
+# docker-genesis/build_luisa_in_container.sh.
+FROM genesis-dev:h20
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+
+# --- domestic mirrors -------------------------------------------------------
+# apt -> aliyun (Ubuntu 24.04 noble uses deb822 format at ubuntu.sources)
+RUN sed -i \
+        -e 's|http://archive.ubuntu.com/ubuntu/|https://mirrors.aliyun.com/ubuntu/|g' \
+        -e 's|http://security.ubuntu.com/ubuntu/|https://mirrors.aliyun.com/ubuntu/|g' \
+        /etc/apt/sources.list.d/ubuntu.sources
+# pip -> aliyun (global config, also used by the entrypoint editable install)
+RUN python3 -m pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ \
+    && python3 -m pip config set global.trusted-host mirrors.aliyun.com
+
+# --- C++ / CUDA build deps --------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential manpages-dev software-properties-common \
+        libvulkan-dev zlib1g-dev xorg-dev libglu1-mesa-dev libsnappy-dev \
+        git curl wget patchelf ninja-build \
+    && add-apt-repository ppa:ubuntu-toolchain-r/test \
+    && apt-get update && apt-get install -y --no-install-recommends gcc-11 g++-11 \
+    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 110 \
+    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 110 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# --- Rust via domestic mirror (rsproxy.cn) ----------------------------------
+# RUSTUP_DIST_SERVER/UPDATE_ROOT point the installer at the mirror; the cargo
+# config redirects crate downloads to the same mirror at build time.
+ENV RUSTUP_DIST_SERVER=https://rsproxy.cn
+ENV RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup
+RUN curl --proto '=https' --tlsv1.2 -sSf https://rsproxy.cn/rustup-init.sh | sh -s -- -y \
+    || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN mkdir -p /root/.cargo && cat > /root/.cargo/config.toml <<'EOF'
+[source.crates-io]
+replace-with = "rsproxy-sparse"
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+[registries.rsproxy]
+index = "sparse+https://rsproxy.cn/index/"
+[net]
+git-fetch-with-cli = true
+EOF
+
+# --- CMake + pybind11 -------------------------------------------------------
+RUN python3 -m pip install --no-cache-dir "cmake==3.31.6" "pybind11[global]"
+
+CMD ["bash"]

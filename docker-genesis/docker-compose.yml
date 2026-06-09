@@ -1,0 +1,48 @@
+# Genesis-world dev container for this H20 host.
+# Usage:
+#   cd docker-genesis
+#   docker compose build
+#   docker compose run --rm genesis            # interactive shell
+#   docker compose run --rm genesis python /workspace/Uni-Genesis/examples/...
+#
+# The host checkout is mounted read-write at /workspace/Uni-Genesis and
+# editable-installed on first start, so code edits on the host take effect live.
+services:
+  genesis:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: genesis-dev:h20
+    # Pick free GPUs at runtime with CUDA_VISIBLE_DEVICES (the host shares cards
+    # with vLLM). All 8 are exposed to the container; the env var narrows them.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      # SM90 workaround (also baked into the image, set here for clarity).
+      - GENESIS_FORCE_MONOLITH_SOLVER=1
+      # Default to GPU 0; override per-run, e.g. `-e CUDA_VISIBLE_DEVICES=3`.
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+      # Run as the host user so mounted files stay host-owned.
+      - LOCAL_USER_ID=${LOCAL_USER_ID:-1029}
+      - LOCAL_GROUP_ID=${LOCAL_GROUP_ID:-1030}
+      - GENESIS_DIR=/workspace/Uni-Genesis
+      # Headless rendering needs no DISPLAY; force EGL/offscreen.
+      - PYOPENGL_PLATFORM=egl
+      # Writable matplotlib cache (HOME may be minimal for the runtime user).
+      - MPLCONFIGDIR=/tmp/mplconfig
+    volumes:
+      - ../:/workspace/Uni-Genesis
+      # Persist compiled-kernel cache across runs (big speedup on restart).
+      - genesis-cache:/home/matianyi/.cache
+    working_dir: /workspace/Uni-Genesis
+    shm_size: "16gb"
+    stdin_open: true
+    tty: true
+
+volumes:
+  genesis-cache:
