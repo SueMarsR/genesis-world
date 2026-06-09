@@ -20,8 +20,8 @@ def support_mesh(
     gjk_info: array_class.GJKInfo,
     direction,
     i_g,
-    pos: qd.types.vector(3, dtype=gs.qd_float),
-    quat: qd.types.vector(4, dtype=gs.qd_float),
+    pos: qd.types.vector(3),
+    quat: qd.types.vector(4),
     i_b,
     i_o,
 ):
@@ -72,8 +72,8 @@ def support_driver(
     support_field_info: array_class.SupportFieldInfo,
     direction,
     i_g,
-    pos: qd.types.vector(3, dtype=gs.qd_float),
-    quat: qd.types.vector(4, dtype=gs.qd_float),
+    pos: qd.types.vector(3),
+    quat: qd.types.vector(4),
     i_b,
     i_o,
     shrink_sphere,
@@ -92,6 +92,8 @@ def support_driver(
         v = support_field._func_support_ellipsoid(geoms_info, direction, i_g, pos, quat)
     elif geom_type == gs.GEOM_TYPE.CAPSULE:
         v = support_field._func_support_capsule(geoms_info, direction, i_g, pos, quat, shrink_sphere)
+    elif geom_type == gs.GEOM_TYPE.CYLINDER:
+        v = support_field._func_support_cylinder(geoms_info, direction, i_g, pos, quat, shrink_sphere)
     elif geom_type == gs.GEOM_TYPE.BOX:
         v, v_, vid = support_field._func_support_box(geoms_info, direction, i_g, pos, quat)
     elif geom_type == gs.GEOM_TYPE.TERRAIN:
@@ -119,10 +121,10 @@ def func_support(
     i_gb,
     i_b,
     dir,
-    pos_a: qd.types.vector(3, dtype=gs.qd_float),
-    quat_a: qd.types.vector(4, dtype=gs.qd_float),
-    pos_b: qd.types.vector(3, dtype=gs.qd_float),
-    quat_b: qd.types.vector(4, dtype=gs.qd_float),
+    pos_a: qd.types.vector(3),
+    quat_a: qd.types.vector(4),
+    pos_b: qd.types.vector(3),
+    quat_b: qd.types.vector(4),
     shrink_sphere,
 ):
     """

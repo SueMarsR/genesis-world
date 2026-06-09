@@ -122,8 +122,8 @@ def _func_support_world(
     support_field_info: array_class.SupportFieldInfo,
     d,
     i_g,
-    pos: qd.types.vector(3, dtype=gs.qd_float),
-    quat: qd.types.vector(4, dtype=gs.qd_float),
+    pos: qd.types.vector(3),
+    quat: qd.types.vector(4),
 ):
     """
     support position for a world direction
@@ -185,8 +185,8 @@ def _func_support_sphere(
     geoms_info: array_class.GeomsInfo,
     d,
     i_g,
-    pos: qd.types.vector(3, dtype=gs.qd_float),
-    quat: qd.types.vector(4, dtype=gs.qd_float),
+    pos: qd.types.vector(3),
+    quat: qd.types.vector(4),
     shrink,
 ):
     sphere_center = pos
@@ -211,8 +211,8 @@ def _func_support_ellipsoid(
     geoms_info: array_class.GeomsInfo,
     d,
     i_g,
-    pos: qd.types.vector(3, dtype=gs.qd_float),
-    quat: qd.types.vector(4, dtype=gs.qd_float),
+    pos: qd.types.vector(3),
+    quat: qd.types.vector(4),
 ):
     a = geoms_info.data[i_g][0]
     b = geoms_info.data[i_g][1]
@@ -236,8 +236,8 @@ def _func_support_capsule(
     geoms_info: array_class.GeomsInfo,
     d,
     i_g,
-    pos: qd.types.vector(3, dtype=gs.qd_float),
-    quat: qd.types.vector(4, dtype=gs.qd_float),
+    pos: qd.types.vector(3),
+    quat: qd.types.vector(4),
     shrink,
 ):
     """
@@ -261,6 +261,35 @@ def _func_support_capsule(
         capsule_endpoint_side = -1.0 if d.dot(capsule_axis) < 0.0 else 1.0
         capsule_endpoint = capsule_center + capsule_halflength * capsule_endpoint_side * capsule_axis
         res = capsule_endpoint + d * capsule_radius
+    return res
+
+
+@qd.func
+def _func_support_cylinder(
+    geoms_info: array_class.GeomsInfo,
+    d,
+    i_g,
+    pos: qd.types.vector(3),
+    quat: qd.types.vector(4),
+    shrink,
+):
+    """
+    Support function for cylinder geometry.
+
+    Like the capsule, but with flat caps: the support point is on the rim of the cap selected by the sign of d along
+    the axis, displaced radially by the radius along d projected onto the cap plane (a sphere/hemisphere cap would
+    instead displace along d itself). When d is axial the radial part vanishes and the support is the cap centre.
+    """
+    radius = geoms_info.data[i_g][0]
+    halflength = 0.5 * geoms_info.data[i_g][1]
+    axis = gu.qd_transform_by_quat(qd.Vector([0.0, 0.0, 1.0], dt=gs.qd_float), quat)
+    endpoint_side = -1.0 if d.dot(axis) < 0.0 else 1.0
+    res = pos + halflength * endpoint_side * axis
+    if not shrink:
+        d_radial = d - d.dot(axis) * axis
+        d_radial_norm = d_radial.norm()
+        if d_radial_norm > 1e-9:
+            res = res + (radius / d_radial_norm) * d_radial
     return res
 
 
@@ -290,8 +319,8 @@ def _func_support_box(
     geoms_info: array_class.GeomsInfo,
     d,
     i_g,
-    pos: qd.types.vector(3, dtype=gs.qd_float),
-    quat: qd.types.vector(4, dtype=gs.qd_float),
+    pos: qd.types.vector(3),
+    quat: qd.types.vector(4),
 ):
     d_box = gu.qd_inv_transform_by_quat(d, quat)
 
@@ -314,7 +343,7 @@ def _func_count_supports_world(
     support_field_info: array_class.SupportFieldInfo,
     d,
     i_g,
-    quat: qd.types.vector(4, dtype=gs.qd_float),
+    quat: qd.types.vector(4),
 ):
     """
     Count the number of valid support points for the given world direction.
@@ -399,7 +428,7 @@ def _func_count_supports_mesh(
 @qd.func
 def _func_count_supports_box(
     d,
-    quat: qd.types.vector(4, dtype=gs.qd_float),
+    quat: qd.types.vector(4),
 ):
     """
     Count the number of valid support points for a box in the given direction.

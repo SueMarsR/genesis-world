@@ -152,8 +152,8 @@ def support_driver(
     direction,
     i_g,
     i_b,
-    pos: qd.types.vector(3, dtype=gs.qd_float),
-    quat: qd.types.vector(4, dtype=gs.qd_float),
+    pos: qd.types.vector(3),
+    quat: qd.types.vector(4),
 ):
     v = qd.Vector.zero(gs.qd_float, 3)
     geom_type = geoms_info.type[i_g]
@@ -163,6 +163,8 @@ def support_driver(
         v = support_field._func_support_ellipsoid(geoms_info, direction, i_g, pos, quat)
     elif geom_type == gs.GEOM_TYPE.CAPSULE:
         v = support_field._func_support_capsule(geoms_info, direction, i_g, pos, quat, False)
+    elif geom_type == gs.GEOM_TYPE.CYLINDER:
+        v = support_field._func_support_cylinder(geoms_info, direction, i_g, pos, quat, False)
     elif geom_type == gs.GEOM_TYPE.BOX:
         v, v_, vid = support_field._func_support_box(geoms_info, direction, i_g, pos, quat)
     elif geom_type == gs.GEOM_TYPE.TERRAIN:
@@ -186,10 +188,10 @@ def compute_support(
     i_ga,
     i_gb,
     i_b,
-    pos_a: qd.types.vector(3, dtype=gs.qd_float),
-    quat_a: qd.types.vector(4, dtype=gs.qd_float),
-    pos_b: qd.types.vector(3, dtype=gs.qd_float),
-    quat_b: qd.types.vector(4, dtype=gs.qd_float),
+    pos_a: qd.types.vector(3),
+    quat_a: qd.types.vector(4),
+    pos_b: qd.types.vector(3),
+    quat_b: qd.types.vector(4),
 ):
     v1 = support_driver(
         geoms_info, collider_state, collider_static_config, support_field_info, direction, i_ga, i_b, pos_a, quat_a
@@ -208,8 +210,8 @@ def func_geom_support(
     verts_info: array_class.VertsInfo,
     direction,
     i_g,
-    pos: qd.types.vector(3, dtype=gs.qd_float),
-    quat: qd.types.vector(4, dtype=gs.qd_float),
+    pos: qd.types.vector(3),
+    quat: qd.types.vector(4),
 ):
     direction_in_init_frame = gu.qd_inv_transform_by_quat(direction, quat)
 
@@ -240,10 +242,10 @@ def mpr_refine_portal(
     i_ga,
     i_gb,
     i_b,
-    pos_a: qd.types.vector(3, dtype=gs.qd_float),
-    quat_a: qd.types.vector(4, dtype=gs.qd_float),
-    pos_b: qd.types.vector(3, dtype=gs.qd_float),
-    quat_b: qd.types.vector(4, dtype=gs.qd_float),
+    pos_a: qd.types.vector(3),
+    quat_a: qd.types.vector(4),
+    pos_b: qd.types.vector(3),
+    quat_b: qd.types.vector(4),
 ):
     ret = 1
     while True:
@@ -347,10 +349,10 @@ def mpr_find_penetration(
     i_ga,
     i_gb,
     i_b,
-    pos_a: qd.types.vector(3, dtype=gs.qd_float),
-    quat_a: qd.types.vector(4, dtype=gs.qd_float),
-    pos_b: qd.types.vector(3, dtype=gs.qd_float),
-    quat_b: qd.types.vector(4, dtype=gs.qd_float),
+    pos_a: qd.types.vector(3),
+    quat_a: qd.types.vector(4),
+    pos_b: qd.types.vector(3),
+    quat_b: qd.types.vector(4),
 ):
     iterations = 0
 
@@ -455,10 +457,10 @@ def mpr_discover_portal(
     i_b,
     center_a,
     center_b,
-    pos_a: qd.types.vector(3, dtype=gs.qd_float),
-    quat_a: qd.types.vector(4, dtype=gs.qd_float),
-    pos_b: qd.types.vector(3, dtype=gs.qd_float),
-    quat_b: qd.types.vector(4, dtype=gs.qd_float),
+    pos_a: qd.types.vector(3),
+    quat_a: qd.types.vector(4),
+    pos_b: qd.types.vector(3),
+    quat_b: qd.types.vector(4),
 ):
     mpr_state.simplex_support.v1[0, i_b] = center_a
     mpr_state.simplex_support.v2[0, i_b] = center_b
@@ -607,10 +609,10 @@ def guess_geoms_center(
     mpr_info: array_class.MPRInfo,
     i_ga,
     i_gb,
-    pos_a: qd.types.vector(3, dtype=gs.qd_float),
-    quat_a: qd.types.vector(4, dtype=gs.qd_float),
-    pos_b: qd.types.vector(3, dtype=gs.qd_float),
-    quat_b: qd.types.vector(4, dtype=gs.qd_float),
+    pos_a: qd.types.vector(3),
+    quat_a: qd.types.vector(4),
+    pos_b: qd.types.vector(3),
+    quat_b: qd.types.vector(4),
     normal_ws,
 ):
     # MPR algorithm was initially design to check whether a pair of convex geometries was colliding. The author
@@ -697,10 +699,10 @@ def func_mpr_contact_from_centers(
     i_b,
     center_a,
     center_b,
-    pos_a: qd.types.vector(3, dtype=gs.qd_float),
-    quat_a: qd.types.vector(4, dtype=gs.qd_float),
-    pos_b: qd.types.vector(3, dtype=gs.qd_float),
-    quat_b: qd.types.vector(4, dtype=gs.qd_float),
+    pos_a: qd.types.vector(3),
+    quat_a: qd.types.vector(4),
+    pos_b: qd.types.vector(3),
+    quat_b: qd.types.vector(4),
 ):
     res = mpr_discover_portal(
         geoms_info=geoms_info,
@@ -725,6 +727,10 @@ def func_mpr_contact_from_centers(
     normal = gs.qd_vec3([0.0, 0.0, 0.0])
     penetration = gs.qd_float(0.0)
 
+    # Only the refined-portal path below leaves a usable contact-face portal in simplex_support; the degenerate
+    # touch/segment paths do not.
+    mpr_state.portal_valid[i_b] = False
+
     if res == 1:
         is_col, normal, penetration, pos = mpr_find_penetr_touch(mpr_state, i_ga, i_gb, i_b)
     elif res == 2:
@@ -746,6 +752,7 @@ def func_mpr_contact_from_centers(
             quat_b,
         )
         if res >= 0:
+            mpr_state.portal_valid[i_b] = True
             is_col, normal, penetration, pos = mpr_find_penetration(
                 geoms_info,
                 static_rigid_sim_config,
@@ -780,10 +787,10 @@ def func_mpr_contact(
     i_gb,
     i_b,
     normal_ws,
-    pos_a: qd.types.vector(3, dtype=gs.qd_float),
-    quat_a: qd.types.vector(4, dtype=gs.qd_float),
-    pos_b: qd.types.vector(3, dtype=gs.qd_float),
-    quat_b: qd.types.vector(4, dtype=gs.qd_float),
+    pos_a: qd.types.vector(3),
+    quat_a: qd.types.vector(4),
+    pos_b: qd.types.vector(3),
+    quat_b: qd.types.vector(4),
 ):
     center_a, center_b = guess_geoms_center(
         geoms_info,

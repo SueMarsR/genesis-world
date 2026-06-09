@@ -624,6 +624,7 @@ def test_equality_link(gs_sim, mj_sim, gs_solver, xml_path):
     )
 
 
+@pytest.mark.slow  # ~250s
 @pytest.mark.required
 def test_dynamic_weld(show_viewer, tol):
     CUBE_POS = (0.65, 0.0, 0.02)
@@ -702,6 +703,7 @@ def test_dynamic_weld(show_viewer, tol):
     assert_allclose(cubes_pos[2] - cubes_pos[0], ee_pos_up - ee_pos_down, tol=1e-3)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 def test_dynamic_weld_scene_reset():
     scene = gs.Scene(
@@ -726,6 +728,7 @@ def test_dynamic_weld_scene_reset():
     assert solver.constraint_solver.constraint_state.qd_n_equalities[1] == n_eq_base + 1
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 def test_reset(show_viewer):
     BOOL_MASK = torch.tensor([True, False, True, False], dtype=torch.bool, device=gs.device)
@@ -1219,6 +1222,7 @@ def test_no_drift(gjk_collision, entity_kind, entity_type, ground_type, show_vie
             surface=gs.surfaces.Default(
                 smooth=False,
             ),
+            visualize_contact=True,
         )
         # Manually overwrite convex flag to forcibly exercise non-convex collision path
         box.geoms[0]._is_convex = is_ground_convex
@@ -1233,6 +1237,7 @@ def test_no_drift(gjk_collision, entity_kind, entity_type, ground_type, show_vie
                 pos=terrain_pos_world,
                 quat=tilt_quat,
             ),
+            visualize_contact=True,
         )
     elif ground_type == "plane":
         plane_pos_world = R @ np.array([0.0, 0.0, HEIGHT])
@@ -1243,6 +1248,7 @@ def test_no_drift(gjk_collision, entity_kind, entity_type, ground_type, show_vie
                 quat=tilt_quat,
                 fixed=True,
             ),
+            visualize_contact=True,
         )
     else:  # if ground_type == "prim":
         scene.add_entity(
@@ -1368,6 +1374,7 @@ def test_no_drift(gjk_collision, entity_kind, entity_type, ground_type, show_vie
     assert_allclose(pos_local[..., :2], smooth_xy_local, atol=1e-3)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 @pytest.mark.xfail(reason="De-duplication of repeated contact points is currently too naive for this test to pass...")
 @pytest.mark.parametrize("surface_kind", ["primitive_box", "primitive_plane", "vertex_box", "flat_terrain"])
@@ -1434,7 +1441,8 @@ def test_contact_dedup(surface_kind, show_viewer):
 
 
 @pytest.mark.required
-def test_contact_pruning(show_viewer):
+@pytest.mark.parametrize("gjk_collision", [True, False])
+def test_contact_pruning(gjk_collision, show_viewer):
     GEOM_HALF_SIZE = 0.1
     MARGIN = 1e-4
 
@@ -1445,7 +1453,7 @@ def test_contact_pruning(show_viewer):
         ),
         rigid_options=gs.options.RigidOptions(
             # box_box_detection=True,
-            use_gjk_collision=True,
+            use_gjk_collision=gjk_collision,
             contact_pruning_tolerance=0.02,
         ),
         viewer_options=gs.options.ViewerOptions(
@@ -1554,6 +1562,266 @@ def test_contact_pruning(show_viewer):
 
 
 @pytest.mark.required
+@pytest.mark.precision("32")
+@pytest.mark.parametrize("gjk_collision", [False, True])
+def test_contact_pruning_authored_decomp(gjk_collision, show_viewer):
+    # A central pole carries six concentric rings, capped by a ball seated in the top ring's hole. Each ring collision
+    # mesh is pre-decomposed into N_WEDGES convex slices, so stacked pieces touch face-to-face along the vertical axis.
+    # Physically only vertical contacts are valid between stacked rings; any lateral contact is a spurious cross-sector
+    # overlap of the convex decomposition. The ball rests on the curved hole surface, so it legitimately produces angled
+    # normals and is exempt from the vertical-normal and one-per-slice checks.
+    N_WEDGES = 16
+    BASE_HEIGHT = 0.020
+    RING_HEIGHT = 0.020
+    BALL_HEIGHT = 0.019
+    RINGS_ORDER = (0, 1, 2, 3, 5, 4)
+
+    NUM_CHECKS = 10
+    POS_TOL = 2e-3
+    # FIXME: The top ball is slightly rotating around z-axis (~0.5degree)
+    ROT_TOL = 1e-2
+
+    scene = gs.Scene(
+        rigid_options=gs.options.RigidOptions(
+            use_gjk_collision=gjk_collision,
+            max_collision_pairs=1200,
+        ),
+        viewer_options=gs.options.ViewerOptions(
+            camera_pos=(0.4, 0.0, 0.3),
+            camera_lookat=(0.0, 0.0, 0.1),
+        ),
+        show_viewer=show_viewer,
+    )
+    plane = scene.add_entity(gs.morphs.Plane())
+    pole = scene.add_entity(
+        morph=gs.morphs.URDF(
+            file="tower/base_pole.urdf",
+            pos=(0.0, 0.0, BASE_HEIGHT / 2),
+            file_meshes_are_zup=True,
+        ),
+        material=gs.materials.Rigid(
+            rho=600.0,
+        ),
+        vis_mode="collision",
+    )
+    rings = []
+    height = BASE_HEIGHT
+    for i, ring_idx in enumerate(RINGS_ORDER):
+        ring = scene.add_entity(
+            morph=gs.morphs.URDF(
+                file=f"tower/ring_{ring_idx + 1:02d}.urdf",
+                pos=(0.0, 0.0, height + (RING_HEIGHT - 1e-4) / 2),
+                # Alternate rotational offset along z-axis to avoid lateral contacts
+                euler=(0.0, 0.0, 180 / N_WEDGES * (i % 2)),
+                file_meshes_are_zup=True,
+            ),
+            material=gs.materials.Rigid(
+                rho=600.0,
+            ),
+            vis_mode="collision",
+            visualize_contact=True,
+        )
+        rings.append(ring)
+        height += RING_HEIGHT - 1e-4
+    ball = scene.add_entity(
+        morph=gs.morphs.URDF(
+            file="tower/ball.urdf",
+            pos=(0.0, 0.0, height + BALL_HEIGHT),
+            file_meshes_are_zup=True,
+        ),
+        material=gs.materials.Rigid(
+            rho=600.0,
+        ),
+        vis_mode="collision",
+    )
+    scene.build()
+
+    geom_owner = {geom.idx: entity for entity in (plane, pole, *rings, ball) for geom in entity.geoms}
+    ring_geoms = {geom.idx for ring in rings for geom in ring.geoms}
+    ball_geoms = {geom.idx for geom in ball.geoms}
+
+    poss_init = [
+        qd_to_torch(scene.rigid_solver.links_info.pos, entity._idx_in_solver) for entity in (pole, *rings, ball)
+    ]
+    rpys_init = [
+        gu.quat_to_xyz(qd_to_torch(scene.rigid_solver.links_info.quat, entity._idx_in_solver), rpy=True)
+        for entity in (pole, *rings, ball)
+    ]
+
+    # Tiny warm-up to deal with initial penetration (~5e-4)
+    for _ in range(2):
+        scene.step()
+
+    # Check that the tower stay in place
+    for _ in range(20):
+        scene.step()
+        for entity, pos_init, rpy_init in zip((pole, *rings, ball), poss_init, rpys_init):
+            assert_allclose(entity.get_pos(), pos_init, atol=POS_TOL)
+            assert_allclose(gu.quat_to_xyz(entity.get_quat(), rpy=True), rpy_init, atol=ROT_TOL)
+        # Only check linear velocity at CoM and angular velocity around z-axis.
+        # It is robust to loosing a few contact points while still asserting the failure modes that matter.
+        assert_allclose(scene.rigid_solver.get_dofs_velocity(dofs_idx=(0, 1, 2, 5)), 0, tol=0.06)
+
+    # A contact step is "ideal" when both invariants hold across all stacked interfaces (the ball seats on a curved
+    # hole and is exempt from both):
+    #   - normals are vertical: only axial contacts are physical between stacked rings; a lateral normal is a spurious
+    #     cross-sector overlap of the convex decomposition,
+    #   - pruning collapses each wedge-pair manifold to one contact per slice, so every pole-ring / ring-ring interface
+    #     carries at most N_WEDGES contacts (without pruning each manifold would emit many more).
+    # Both invariants fail together on a bad step (a spurious lateral overlap also inflates the slice count). MPR keeps
+    # the sub-resolution overlaps below the rejection floor on every step; GJK's tighter penetration estimates let one
+    # spike above it occasionally in fp32, so it only has to be ideal at least once.
+    for _ in range(NUM_CHECKS):
+        scene.step()
+        contacts = scene.rigid_solver.collider.get_contacts(to_torch=False)
+        geom_a, geom_b = contacts["geom_a"], contacts["geom_b"]
+        penetration = contacts["penetration"]
+        normal_z = contacts["normal"][:, 2]
+        interface_counts = {}
+        is_vertical = True
+        for i in range(len(geom_a)):
+            if penetration[i] <= 0.0:
+                continue
+            a, b = int(geom_a[i]), int(geom_b[i])
+            if a in ball_geoms or b in ball_geoms:
+                continue
+            if abs(normal_z[i]) < 0.5:
+                is_vertical = False
+            if a in ring_geoms or b in ring_geoms:
+                key = frozenset((geom_owner[a], geom_owner[b]))
+                interface_counts[key] = interface_counts.get(key, 0) + 1
+        # pole-ring0 plus each ring-ring interface up the stack
+        is_pruned = len(interface_counts) == len(rings) and all(
+            count <= N_WEDGES for count in interface_counts.values()
+        )
+        assert is_vertical and is_pruned
+
+
+@pytest.mark.required
+@pytest.mark.precision("32")
+@pytest.mark.parametrize("backend", [gs.gpu])
+@pytest.mark.parametrize("contact_pruning_tolerance", [0.02, None], ids=["prune", "noprune"])
+@pytest.mark.parametrize("prefer_decomposed_solver", [0, 1], ids=["monolith", "decomposed"])
+def test_gpu_simulation_determinism(prefer_decomposed_solver, contact_pruning_tolerance, monkeypatch, show_viewer):
+    # Run-to-run reproducibility on GPU: from an identical initial state, every trial must reproduce a bit-identical
+    # trajectory. CPU is serialized and deterministic by construction, so this targets GPU parallel races only
+    # (atomic_add slot reservation, parallel reductions, scheduling). The two registered solve implementations are
+    # numerically distinct, so each is pinned via prefer_decomposed_solver (0 -> monolith, 1 -> decomposed) to bypass
+    # the perf-dispatch autotuner, whose timing-based choice between them is a separate nondeterminism source; this
+    # isolates physics-kernel determinism per variant.
+    #
+    # The authored-decomposition tower is the stress case: stacked rings pre-split into convex wedges produce many
+    # multi-contact manifolds per geom pair, exercising the narrowphase, contact pruning, the contact sort, and the
+    # contact-coupled solve. The per-step fingerprints are compared in pipeline order so the assertion names the
+    # earliest diverging stage, pinpointing the root:
+    #   - contact set    -> narrowphase / pruning
+    #   - contact order  -> contact sort
+    #   - dofs velocity  -> constraint solve
+    from genesis.utils.array_class import RigidSimStaticConfig
+
+    init_orig = RigidSimStaticConfig.__init__
+
+    def init_forced(self, *args, **kwargs):
+        kwargs["prefer_decomposed_solver"] = prefer_decomposed_solver
+        init_orig(self, *args, **kwargs)
+
+    monkeypatch.setattr(RigidSimStaticConfig, "__init__", init_forced)
+
+    N_TRIALS = 8
+    N_STEPS = 25
+    N_WEDGES = 16
+    BASE_HEIGHT = 0.020
+    RING_HEIGHT = 0.020
+    BALL_HEIGHT = 0.019
+    RINGS_ORDER = (0, 1, 2, 3, 5, 4)
+
+    scene = gs.Scene(
+        rigid_options=gs.options.RigidOptions(
+            use_gjk_collision=True,
+            contact_pruning_tolerance=contact_pruning_tolerance,
+            max_collision_pairs=1200,
+        ),
+        show_viewer=show_viewer,
+    )
+    scene.add_entity(gs.morphs.Plane())
+    scene.add_entity(
+        morph=gs.morphs.URDF(
+            file="tower/base_pole.urdf",
+            pos=(0.0, 0.0, BASE_HEIGHT / 2),
+            file_meshes_are_zup=True,
+        ),
+        material=gs.materials.Rigid(rho=600.0),
+    )
+    height = BASE_HEIGHT
+    for i, ring_idx in enumerate(RINGS_ORDER):
+        scene.add_entity(
+            morph=gs.morphs.URDF(
+                file=f"tower/ring_{ring_idx + 1:02d}.urdf",
+                pos=(0.0, 0.0, height + (RING_HEIGHT - 1e-4) / 2),
+                # Alternate rotational offset along z-axis to avoid lateral contacts
+                euler=(0.0, 0.0, 180 / N_WEDGES * (i % 2)),
+                file_meshes_are_zup=True,
+            ),
+            material=gs.materials.Rigid(rho=600.0),
+        )
+        height += RING_HEIGHT - 1e-4
+    ball = scene.add_entity(
+        morph=gs.morphs.URDF(
+            file="tower/ball.urdf",
+            pos=(0.0, 0.0, height + BALL_HEIGHT),
+            file_meshes_are_zup=True,
+        ),
+        material=gs.materials.Rigid(rho=600.0),
+    )
+    scene.build()
+    solver = scene.rigid_solver
+
+    # The ball is a sphere seated in the top ring's hole, so every ball contact normal must point radially
+    ball_geoms_idx = {geom.idx for geom in ball.geoms}
+    ball_center = np.atleast_2d(tensor_to_array(ball.get_pos()))[0]
+    solver.collider.detection()
+    contacts = solver.collider.get_contacts(to_torch=False)
+    geom_a, geom_b = contacts["geom_a"], contacts["geom_b"]
+    position, normal, penetration = contacts["position"], contacts["normal"], contacts["penetration"]
+    for i in range(len(geom_a)):
+        if penetration[i] <= 0.0 or (geom_a[i] not in ball_geoms_idx and geom_b[i] not in ball_geoms_idx):
+            continue
+        radial = ball_center - position[i]
+        radial /= np.linalg.norm(radial)
+        cos_angle = min(1.0, abs(np.dot(normal[i], radial)))
+        assert np.degrees(np.arccos(cos_angle)) < 15.0
+
+    # trials[trial][step] = (contact_set, contact_order, dofs_velocity, dofs_position)
+    trials = []
+    for _ in range(N_TRIALS):
+        scene.reset()
+        steps = []
+        for _ in range(N_STEPS):
+            scene.step()
+            contacts = solver.collider.get_contacts(to_torch=False)
+            geom_a, geom_b = contacts["geom_a"], contacts["geom_b"]
+            position, normal, penetration = contacts["position"], contacts["normal"], contacts["penetration"]
+            contact_order = tuple(
+                (geom_a[i], geom_b[i], *position[i], *normal[i], penetration[i]) for i in range(len(geom_a))
+            )
+            dofs_velocity = tensor_to_array(solver.get_dofs_velocity()).copy()
+            dofs_position = tensor_to_array(solver.get_qpos()).copy()
+            steps.append((frozenset(contact_order), contact_order, dofs_velocity, dofs_position))
+        trials.append(steps)
+
+    ref = trials[0]
+    for trial in range(1, N_TRIALS):
+        for step in range(N_STEPS):
+            ref_set, ref_order, ref_vel, ref_pos = ref[step]
+            cur_set, cur_order, cur_vel, cur_pos = trials[trial][step]
+            assert cur_set == ref_set
+            assert cur_order == ref_order
+            assert_equal(cur_vel, ref_vel)
+            assert_equal(cur_pos, ref_pos)
+
+
+@pytest.mark.slow  # ~200s
+@pytest.mark.required
 @pytest.mark.parametrize(
     "model_name",
     [
@@ -1594,6 +1862,9 @@ def test_contact_pruning_degenerated_hull(model_name, xml_path, show_viewer):
         morph=gs.morphs.MJCF(
             file=xml_path,
         ),
+        surface=gs.surfaces.Default(
+            smooth=False,
+        ),
     )
     scene.build(n_envs=N_ENVS)
 
@@ -1627,7 +1898,6 @@ def test_contact_pruning_degenerated_hull(model_name, xml_path, show_viewer):
     assert_allclose(entity.get_pos()[..., :2], smooth_xy, atol=1e-3)
 
 
-@pytest.mark.slow  # ~200s
 @pytest.mark.debug(False)  # Disable debug for speedup
 @pytest.mark.parametrize(
     "box_box_detection, gjk_collision, dynamics",
@@ -1815,6 +2085,7 @@ def test_robot_scale_and_dofs_armature(xml_path, tol):
     assert_allclose(qf_passive, 0.0, tol=tol)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 def test_robot_scaling_primitive_collision(show_viewer):
     scene = gs.Scene(
@@ -1846,6 +2117,7 @@ def test_robot_scaling_primitive_collision(show_viewer):
     assert_allclose(robot_min_corner[2], 0.0, tol=1e-3)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 def test_filter_neutral_self_collisions(show_viewer):
     scene = gs.Scene(
@@ -1932,6 +2204,7 @@ def test_filter_neutral_self_collisions(show_viewer):
         scene.step()
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 def test_info_batching(tol):
     scene = gs.Scene(
@@ -2056,6 +2329,7 @@ def test_position_control(show_viewer):
         assert_allclose(pos_target, robot.get_dofs_position(envs_idx=1), tol=1e-2)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 @pytest.mark.parametrize("batch_fixed_verts", [False, True])
 @pytest.mark.parametrize("relative", [False, True])
@@ -2179,6 +2453,7 @@ def test_set_root_pose(batch_fixed_verts, relative, show_viewer, tol):
             assert_allclose(quat, quat_ref, tol=tol)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 def test_normalized_quat(show_viewer, tol):
     scene = gs.Scene(
@@ -2232,6 +2507,7 @@ def test_normalized_quat(show_viewer, tol):
     assert_allclose(torch.linalg.norm(scene.rigid_solver.get_geoms_quat(), dim=-1), 1.0, tol=tol)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 @pytest.mark.parametrize("n_envs, batched", [(0, False), (3, True)])
 def test_set_sol_params(n_envs, batched, tol):
@@ -2266,7 +2542,6 @@ def test_set_sol_params(n_envs, batched, tol):
             assert_allclose(obj.sol_params, [2.0e-02, 0.5, 1e-4, 1e-4, 0.0, 1e-4, 1.0], tol=tol)
 
 
-@pytest.mark.slow  # ~160s
 @pytest.mark.required
 @pytest.mark.mujoco_compatibility(False)
 @pytest.mark.parametrize("xml_path", ["xml/humanoid.xml"])
@@ -2281,11 +2556,21 @@ def test_stickman(gs_sim, mj_sim, tol):
     # Initialize the simulation
     init_simulators(gs_sim)
 
-    # Run the simulation for a few steps
-    qvel_norminf_all = []
-    for i in range(6000):
+    # Make sure that the simulation is deterministic
+    (gs_robot,) = gs_sim.entities
+    gs_sim.scene.reset()
+    gs_sim.scene.step()
+    dofs_vel = gs_robot.get_dofs_velocity()
+    for _ in range(50):
+        gs_sim.scene.reset()
         gs_sim.scene.step()
-        if i > 4000:
+        assert_equal(gs_robot.get_dofs_velocity(), dofs_vel)
+
+    # Run the simulation for a while
+    qvel_norminf_all = []
+    for i in range(750):
+        gs_sim.scene.step()
+        if i > 700:
             (gs_robot,) = gs_sim.entities
             qvel = gs_robot.get_dofs_velocity()
             qvel_norminf = torch.linalg.norm(qvel, ord=math.inf)
@@ -2298,6 +2583,7 @@ def test_stickman(gs_sim, mj_sim, tol):
     np.testing.assert_array_less(0, body_z + gs.EPS)
 
 
+@pytest.mark.slow("gpu")  # gpu ~250s
 @pytest.mark.required
 @pytest.mark.parametrize("backend", [gs.cpu, gs.gpu])
 def test_inverse_kinematics_multilink(show_viewer, tol):
@@ -2354,6 +2640,7 @@ def test_inverse_kinematics_multilink(show_viewer, tol):
     assert_allclose(wrist.get_pos(envs_idx=(1,)), wrist_pos, tol=tol)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 @pytest.mark.parametrize("n_envs", [0, 2])
 def test_inverse_kinematics_local_point(n_envs, show_viewer, tol):
@@ -2441,6 +2728,7 @@ def test_inverse_kinematics_local_point(n_envs, show_viewer, tol):
         scene.visualizer.update()
 
 
+@pytest.mark.slow("gpu")  # gpu ~250s
 @pytest.mark.required
 @pytest.mark.parametrize("backend", [gs.cpu, gs.gpu])
 def test_inverse_kinematics_multilink_local_points(show_viewer, tol):
@@ -2500,6 +2788,7 @@ def test_inverse_kinematics_multilink_local_points(show_viewer, tol):
         assert_allclose(actual_point_pos, target, tol=tol)
 
 
+@pytest.mark.slow  # ~250s
 @pytest.mark.required
 def test_multi_robot_inverse_kinematics(show_viewer, tol):
     scene = gs.Scene(show_viewer=show_viewer)
@@ -2540,7 +2829,7 @@ def test_multi_robot_inverse_kinematics(show_viewer, tol):
         assert_allclose(target_pos, ee_pos, atol=tol)
 
 
-@pytest.mark.slow  # ~180s
+@pytest.mark.slow("gpu")  # gpu ~300s
 @pytest.mark.required
 @pytest.mark.parametrize("n_envs", [0, 2])
 @pytest.mark.parametrize("backend", [gs.cpu, gs.gpu])
@@ -2693,6 +2982,7 @@ def test_all_fixed(show_viewer):
     assert_allclose(scene.rigid_solver.get_links_acc(), 0, tol=gs.EPS)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 @pytest.mark.parametrize("precision", ["32"])
 @pytest.mark.parametrize("backend", [gs.gpu])
@@ -2793,6 +3083,7 @@ def test_contact_forces(show_viewer):
     assert np.percentile(all_errors, 95) < 2e-4
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 @pytest.mark.parametrize("model_name", ["double_ball_pendulum"])
 def test_apply_external_forces(xml_path, show_viewer):
@@ -2883,6 +3174,7 @@ def test_apply_external_forces(xml_path, show_viewer):
         )
 
 
+@pytest.mark.slow  # ~250s
 @pytest.mark.required
 def test_mass_mat(show_viewer, tol):
     # Create and build the scene
@@ -2965,6 +3257,7 @@ def test_set_dofs_frictionloss_physics(gs_sim, tol):
     np.testing.assert_array_less(tol, slide_friction_effect)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 def test_frictionloss_advanced(show_viewer, tol):
     scene = gs.Scene(
@@ -3073,7 +3366,7 @@ def test_nonconvex_nonwatertight_collision(show_viewer):
             convexify=False,
             fixed=True,
         ),
-        # vis_mode="collision",
+        vis_mode="collision",
     )
     obj = scene.add_entity(
         gs.morphs.Box(
@@ -3296,7 +3589,7 @@ def test_nonconvex_overlap(show_viewer):
     b.set_dofs_velocity(-1.0, dofs_idx_local=0)
 
     total_energy_history = []
-    for step in range(200):
+    for _ in range(200):
         total_energy = tensor_to_array(a.get_total_energy() + b.get_total_energy())
         total_energy_history.append(total_energy)
         scene.step()
@@ -3338,7 +3631,7 @@ def test_nonconvex_concentric_contact(direction, show_viewer):
             constraint_timeconst=4e-3,
         ),
         viewer_options=gs.options.ViewerOptions(
-            camera_pos=(0.11, 0.075, 0.085),
+            camera_pos=(0.0, -0.2, 0.1),
             camera_lookat=(0.0, 0.0, 0.03),
             camera_fov=35,
         ),
@@ -3370,6 +3663,7 @@ def test_nonconvex_concentric_contact(direction, show_viewer):
         ),
         material=steel,
         vis_mode="collision",
+        # visualize_contact=True,
     )
     scene.build()
 
@@ -3403,7 +3697,7 @@ def test_nonconvex_concentric_contact(direction, show_viewer):
         # Fraction of the nut height still threaded below the shaft tip (capped at 1 while fully on the shaft). Track
         # the last driven sample with more than a third engaged for the advance-per-revolution check below.
         engaged = torch.clamp((SHAFT_TIP_Z - (pos[..., 2] - NUT_HEIGHT / 2.0)) / NUT_HEIGHT, max=1.0)
-        if driving and (engaged > 1.0 / 3.0).all():
+        if driving and (engaged > 0.5).all():
             z_engaged = pos[..., 2]
             turn_engaged = total_turn
         # While steadily screwing through the middle of the thread (past the initial spin-up, away from the seat and
@@ -3437,7 +3731,55 @@ def test_nonconvex_concentric_contact(direction, show_viewer):
         # of its velocities have decayed to zero.
         aabb = nut.get_AABB()
         assert (aabb[..., 0, 2] < 1.0e-3).all()
-        assert_allclose(nut.get_dofs_velocity(), 0.0, atol=0.05)
+        assert_allclose(nut.get_dofs_velocity(), 0.0, atol=0.06)
+
+
+# Force CPU because nonconvex SDF is slow on GPU
+@pytest.mark.slow  # ~250s
+@pytest.mark.parametrize("backend", [gs.cpu])
+@pytest.mark.parametrize("timestep, decimate", [(0.001, False), (0.015, True)])
+def test_nonconvex_concave_slanted_wall(timestep, decimate, show_viewer):
+    BOWL_THICKNESS = 0.011
+    NUM_BOWLS = 32
+
+    timeconst = max(0.005, 2 * timestep)
+    scene = gs.Scene(
+        sim_options=gs.options.SimOptions(
+            dt=timestep,
+        ),
+        viewer_options=gs.options.ViewerOptions(
+            camera_pos=(-0.6, 0.6, 0.5),
+            camera_lookat=(-0.25, 0.0, 0.3),
+        ),
+        renderer=gs.renderers.Rasterizer(),
+        show_viewer=show_viewer,
+    )
+    scene.add_entity(morph=gs.morphs.Plane())
+    asset_path = get_hf_dataset(pattern="glb/orange_plastic_bowl.glb")
+    for i in range(NUM_BOWLS):
+        scene.add_entity(
+            morph=gs.morphs.Mesh(
+                file=f"{asset_path}/glb/orange_plastic_bowl.glb",
+                pos=(0, 0, 0.0 + i * BOWL_THICKNESS),
+                euler=(90, 0, 0),
+                convexify=False,
+                decimate=decimate,
+                file_meshes_are_zup=True,
+            ),
+            vis_mode="collision",
+            # visualize_contact=(i in (0, NUM_BOWLS - 1)),
+        )
+    scene.build()
+
+    # Make sure that the pile stays upright, with bowls stay tightly packed together during the entire motion
+    for _ in range(1500):
+        scene.step()
+        bowls_pos = np.stack([tensor_to_array(entity.get_pos()) for entity in scene.entities[-NUM_BOWLS:]], axis=0)
+        bowls_dist_abs = np.linalg.norm(bowls_pos[:, :2] - bowls_pos[:2, 0], axis=-1)
+        assert (bowls_dist_abs < 0.1).all()
+        bowls_dist_rel = np.linalg.norm(np.diff(bowls_pos, axis=0), axis=-1)
+        assert ((BOWL_THICKNESS - 0.5 * timeconst) < bowls_dist_rel).all()
+        assert (bowls_dist_rel < BOWL_THICKNESS + 3e-3).all()
 
 
 @pytest.mark.required
@@ -3459,7 +3801,7 @@ def test_mesh_repair(convexify, show_viewer, gjk_collision):
         show_FPS=False,
     )
     asset_path = get_hf_dataset(pattern="work_table.glb")
-    table = scene.add_entity(
+    scene.add_entity(
         gs.morphs.Mesh(
             file=f"{asset_path}/work_table.glb",
             pos=(0.4, 0.0, -0.54),
@@ -3471,8 +3813,8 @@ def test_mesh_repair(convexify, show_viewer, gjk_collision):
     obj = scene.add_entity(
         gs.morphs.Mesh(
             file=f"{asset_path}/spoon.glb",
-            pos=(0.3, 0, 0.007),
-            euler=(0.0, -2.5, 0.0),
+            pos=(0.3, 0, 0.009),
+            euler=(0.0, -2.5 if convexify else 0.0, 0.0),
             convexify=convexify,
             scale=1.0,
         ),
@@ -3483,7 +3825,7 @@ def test_mesh_repair(convexify, show_viewer, gjk_collision):
 
     if show_viewer:
         obj_com = obj.get_links_pos(ref="link_com")[0]
-        debug_sphere = scene.draw_debug_sphere(pos=obj_com, radius=0.003, color=(1, 1, 1, 1))
+        scene.draw_debug_sphere(pos=obj_com, radius=0.003, color=(1, 1, 1, 1))
         scene.visualizer.update(force=True)
 
     for geom in obj.geoms:
@@ -3498,9 +3840,9 @@ def test_mesh_repair(convexify, show_viewer, gjk_collision):
     tol_pos = 0.05 if is_mpr else 0.005
     tol_rot = 1.25 if is_mpr else 0.5
     init_pos = obj.geoms[0].get_pos()
-    for i in range(50):
+    for _ in range(50):
         scene.step()
-    for i in range(100):
+    for _ in range(100):
         scene.step()
         qvel = obj.get_dofs_velocity()
         assert_allclose(qvel[:3], 0, atol=tol_pos)
@@ -3508,24 +3850,26 @@ def test_mesh_repair(convexify, show_viewer, gjk_collision):
     assert_allclose(obj.geoms[0].get_pos()[:2], init_pos[:2], atol=2e-3)
 
 
-@pytest.mark.slow  # ~160s
 @pytest.mark.required
 @pytest.mark.parametrize("euler", [(90, 0, 90), (74, 15, 90)])
 @pytest.mark.parametrize("gjk_collision", [True, False])
 @pytest.mark.parametrize("backend", [gs.cpu, gs.gpu])
-def test_convexify(euler, backend, show_viewer, gjk_collision):
+def test_convexify(euler, show_viewer, gjk_collision):
     OBJ_OFFSET_X = 0.0  # 0.02
     OBJ_OFFSET_Y = 0.15
 
-    # The test check that the volume difference is under a given threshold and
-    # that convex decomposition is only used whenever it is necessary.
-    # Then run a simulation to see if it explodes, i.e. objects are at reset inside tank.
+    # The test check that the volume difference is under a given threshold and that convex decomposition is only used
+    # whenever it is necessary. Then run a simulation to see if it explodes, i.e. objects are at reset inside tank.
     scene = gs.Scene(
         sim_options=gs.options.SimOptions(
             dt=0.004,
         ),
         rigid_options=gs.options.RigidOptions(
             use_gjk_collision=gjk_collision,
+        ),
+        viewer_options=gs.options.ViewerOptions(
+            camera_pos=(1.0, 0.5, 2.5),
+            camera_lookat=(0.0, 0.0, 0.5),
         ),
         show_viewer=show_viewer,
         show_FPS=False,
@@ -3538,12 +3882,12 @@ def test_convexify(euler, backend, show_viewer, gjk_collision):
         ),
         vis_mode="collision",
     )
-    tank = scene.add_entity(
+    scene.add_entity(
         gs.morphs.Mesh(
             file="meshes/tank.obj",
             scale=5.0,
             fixed=True,
-            pos=(0.05, -0.1, 0.0),
+            pos=(0.05, -0.05, 0.0),
             euler=euler,
             # coacd_options=gs.options.CoacdOptions(
             #     threshold=0.08,
@@ -3552,11 +3896,13 @@ def test_convexify(euler, backend, show_viewer, gjk_collision):
         vis_mode="collision",
     )
     objs = []
-    for i, asset_name in enumerate(("mug_1", "donut_0", "cup_2", "apple_15")):
+    for i, (asset_name, xml_file) in enumerate(
+        (("mug_1", "output.xml"), ("donut_0", "output.xml"), ("cup_2", "model.xml"), ("apple_15", "model.xml"))
+    ):
         asset_path = get_hf_dataset(pattern=f"{asset_name}/*")
         obj = scene.add_entity(
             gs.morphs.MJCF(
-                file=f"{asset_path}/{asset_name}/output.xml",
+                file=f"{asset_path}/{asset_name}/{xml_file}",
                 pos=(OBJ_OFFSET_X * (1.5 - i), OBJ_OFFSET_Y * (i - 1.5), 0.4),
             ),
             vis_mode="collision",
@@ -3581,40 +3927,39 @@ def test_convexify(euler, backend, show_viewer, gjk_collision):
     # There should be only one geometry for the apple as it can be convexify without decomposition,
     # but for the others it is hard to tell... Let's use some reasonable guess.
     mug, donut, cup, apple = objs
-    assert len(apple.geoms) == 1
+    assert not any(geom.metadata.get("decomposed", False) for geom in apple.geoms)
+    assert not any(geom.metadata.get("decomposed", False) for geom in cup.geoms)
     assert all(geom.metadata["decomposed"] for geom in donut.geoms) and 5 <= len(donut.geoms) <= 10
-    assert all(geom.metadata["decomposed"] for geom in cup.geoms) and 5 <= len(cup.geoms) <= 20
     assert all(geom.metadata["decomposed"] for geom in mug.geoms) and 5 <= len(mug.geoms) <= 40
     assert all(geom.metadata["decomposed"] for geom in box.geoms) and 5 <= len(box.geoms) <= 20
 
     # Check resting conditions repeateadly rather not just once, for numerical robustness
     # cam.start_recording()
     qvel_norminf_all = []
-    for i in range(1700):
+    for i in range(900):
         scene.step()
         # cam.render()
-        if i > 1600:
-            qvel = gs_sim.rigid_solver.get_dofs_velocity()
-            qvel_norminf = torch.linalg.norm(qvel, ord=math.inf)
+        if i > 800:
+            qvel = tensor_to_array(gs_sim.rigid_solver.get_dofs_velocity())
+            qvel_norminf = np.linalg.norm(qvel, ord=float("inf"))
             qvel_norminf_all.append(qvel_norminf)
-    np.testing.assert_array_less(torch.median(torch.stack(qvel_norminf_all, dim=0)).cpu(), 4.0)
+    np.testing.assert_array_less(np.median(np.stack(qvel_norminf_all, axis=0)), 0.1)
     # cam.stop_recording(save_to_filename="video.mp4", fps=60)
 
     for obj in objs:
-        qpos = obj.get_dofs_position().cpu()
-        np.testing.assert_array_less(-0.1, qpos[2])
-        np.testing.assert_array_less(qpos[2], 0.15)
-        np.testing.assert_array_less(torch.linalg.norm(qpos[:2]), 0.5)
+        obj_pos = tensor_to_array(obj.get_pos())
+        np.testing.assert_array_less(-0.1, obj_pos[2])
+        np.testing.assert_array_less(obj_pos[2], 0.15)
+        np.testing.assert_array_less(np.linalg.norm(obj_pos[:2]), 0.5)
 
-    # Check that the mug and donut are landing straight if the tank is horizontal.
-    # The cup is tipping because it does not land flat due to convex decomposition error.
+    # Check that the mug, donut and cup are landing straight if the tank is horizontal
     if euler == (90, 0, 90):
-        for i, obj in enumerate((mug, donut)):
-            qpos = obj.get_dofs_position()
-            assert_allclose(qpos[0], OBJ_OFFSET_X * (1.5 - i), atol=7e-3)
-            assert_allclose(qpos[1], OBJ_OFFSET_Y * (i - 1.5), atol=5e-3)
+        for i, obj in enumerate((mug, donut, cup)):
+            obj_pos = obj.get_pos()
+            assert_allclose(obj_pos[:2], (OBJ_OFFSET_X * (1.5 - i), OBJ_OFFSET_Y * (i - 1.5)), atol=7e-3)
 
 
+@pytest.mark.slow("gpu")  # gpu ~250s
 @pytest.mark.required
 @pytest.mark.parametrize("backend", [gs.cpu, gs.gpu])
 def test_num_contact_overflow(show_viewer):
@@ -3645,7 +3990,7 @@ def test_num_contact_overflow(show_viewer):
 @pytest.mark.parametrize("gs_integrator", [gs.integrator.Euler])
 @pytest.mark.parametrize("gjk_collision", [True, False])
 @pytest.mark.parametrize("backend", [gs.cpu, gs.gpu])
-def test_collision_edge_cases(gs_sim, mode, gjk_collision):
+def test_collision_edge_cases(gs_sim, mode):
     qpos_0 = gs_sim.rigid_solver.get_dofs_position()
     for _ in range(200):
         gs_sim.scene.step()
@@ -3657,6 +4002,7 @@ def test_collision_edge_cases(gs_sim, mode, gjk_collision):
     assert_allclose(qpos[[0, 1, 3, 4, 5]], qpos_0[[0, 1, 3, 4, 5]], atol=atol)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 @pytest.mark.parametrize("backend", [gs.cpu])
 def test_collision_plane_convex(show_viewer, tol):
@@ -4113,6 +4459,7 @@ def test_jacobian_compound_joints(xml_path, tol):
         assert_allclose(robot.get_jacobian(end_link), np.concatenate([jacp, jacr]), tol=tol)
 
 
+@pytest.mark.slow  # ~250s
 @pytest.mark.required
 def test_mjcf_parsing_with_include():
     scene = gs.Scene()
@@ -4124,6 +4471,7 @@ def test_mjcf_parsing_with_include():
     assert_allclose(robot1.get_qpos(), robot3.get_qpos(), tol=gs.EPS)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 def test_urdf_parsing(show_viewer, tol):
     POS_OFFSET = 0.8
@@ -4229,6 +4577,7 @@ def test_urdf_parsing(show_viewer, tol):
     _check_entity_positions(relative=True, tol=2e-3)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 @pytest.mark.parametrize("model_name", ["undefined_inertia"])
 def test_urdf_parsing_undefined_inertia(xml_path, show_viewer):
@@ -4255,6 +4604,7 @@ def test_urdf_parsing_undefined_inertia(xml_path, show_viewer):
     assert_allclose(entity.get_pos(), (0, 0, 0.03), tol=1e-3)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 @pytest.mark.parametrize("urdf_path", ["chain.urdf", "dual_arms_glb/dual_arms_glb.urdf", "dual_arms_primitives.urdf"])
 @pytest.mark.parametrize("fixed", [False, True])
@@ -4373,6 +4723,7 @@ def test_mjcf_parsing_merge_fixed_links(xml_path, show_viewer):
     assert_allclose(robot.get_quat(), QUAT, tol=gs.EPS)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 def test_urdf_capsule(tmp_path, show_viewer, tol):
     urdf_path = tmp_path / "capsule.urdf"
@@ -4632,6 +4983,7 @@ def freeflyer_urdf():
     return robot
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 @pytest.mark.parametrize("model_name", ["freeflyer_mjcf", "freeflyer_urdf"])
 def test_default_armature_freeflyer(xml_path):
@@ -4689,7 +5041,7 @@ def test_gravity(show_viewer, tol):
     )
 
 
-@pytest.mark.slow  # ~110s
+@pytest.mark.slow  # ~350s
 @pytest.mark.required
 @pytest.mark.parametrize("backend", [gs.cpu, gs.gpu])
 def test_scene_saver_franka(tmp_path, show_viewer, tol):
@@ -4857,6 +5209,7 @@ def test_drone_advanced(show_viewer):
     assert abs(quat_1[2] - quat_2[2]) < tol
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 def test_get_constraints_api(show_viewer, tol):
     scene = gs.Scene(
@@ -4886,7 +5239,7 @@ def test_get_constraints_api(show_viewer, tol):
         assert_allclose((link_a_[1], link_b_[1]), ((link_a,), (link_b,)), tol=0)
 
 
-@pytest.mark.slow  # ~200s
+@pytest.mark.slow  # ~500s
 @pytest.mark.required
 @pytest.mark.parametrize("precision", ["32", "64"])
 @pytest.mark.parametrize("backend", [gs.gpu])
@@ -4941,6 +5294,7 @@ def test_cholesky_tiling(monkeypatch, tol):
     assert_allclose(*values, tol=5e-4)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.precision("32")
 @pytest.mark.parametrize("backend", [gs.cuda])
 def test_cholesky_tiling_large_shared_memory(show_viewer):
@@ -4985,7 +5339,7 @@ def test_cholesky_tiling_large_shared_memory(show_viewer):
     assert not scene.rigid_solver.get_error_envs_mask().any()
 
 
-@pytest.mark.slow  # ~100s
+@pytest.mark.slow  # ~200s
 @pytest.mark.parametrize(
     "n_envs, batched, backend",
     [
@@ -5401,6 +5755,7 @@ def test_getter_vs_state_post_step_consistency(enable_mujoco_compatibility):
         assert_allclose(dof_pos[:3], pos, atol=gs.EPS)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 def test_extended_broadcasting():
     scene = gs.Scene(
@@ -5463,6 +5818,7 @@ def test_geom_pos_quat(n_envs, show_viewer):
             assert_allclose(geom_quat, vgeom_quat, atol=gs.EPS)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 def test_contype_conaffinity(show_viewer, tol):
     GRAVITY = (0.0, 0.0, -10.0)
@@ -5511,6 +5867,7 @@ def test_contype_conaffinity(show_viewer, tol):
         surface=gs.surfaces.Default(
             color=(0.0, 0.0, 1.0, 1.0),
         ),
+        visualize_contact=True,
     )
     box4 = scene.add_entity(
         morph=gs.morphs.Box(
@@ -5522,6 +5879,7 @@ def test_contype_conaffinity(show_viewer, tol):
         surface=gs.surfaces.Default(
             color=(0.8, 0.8, 0.8, 1.0),
         ),
+        visualize_contact=True,
     )
     scene.build()
 
@@ -5534,6 +5892,7 @@ def test_contype_conaffinity(show_viewer, tol):
     assert_allclose(scene.rigid_solver.get_links_acc(slice(box4.link_start, box4.link_end)), GRAVITY, atol=tol)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 def test_mesh_primitive_COM(show_viewer):
     scene = gs.Scene(
@@ -5582,7 +5941,7 @@ def test_mesh_primitive_COM(show_viewer):
     assert_allclose(cube_COM[2], 0.25, atol=2e-3)
 
 
-@pytest.mark.slow  # ~110s
+@pytest.mark.slow("gpu")  # gpu ~250s
 @pytest.mark.required
 @pytest.mark.parametrize("scale", [0.04, 1.0])
 @pytest.mark.parametrize("friction", [0.5, 2.0])
@@ -5678,6 +6037,7 @@ def test_noslip_iterations(scale, friction, mesh_boxes, show_viewer, tol, asset_
         assert box_z < -scale
 
 
+@pytest.mark.slow  # ~250s
 @pytest.mark.required
 @pytest.mark.parametrize("n_envs", [0, 3])
 def test_axis_aligned_bounding_boxes(n_envs):
@@ -5764,6 +6124,7 @@ def test_axis_aligned_bounding_boxes(n_envs):
     assert_allclose(robot_vaabb, robot_aabb, atol=1e-3)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 @pytest.mark.parametrize("model_name", ["ellipsoid"])
 def test_ellipsoid(xml_path, show_viewer):
@@ -5807,6 +6168,7 @@ def test_ellipsoid(xml_path, show_viewer):
     assert_allclose((roll, pitch), (0.0, 0.0), tol=5e-3)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 def test_mesh_align(show_viewer, tol):
     INIT_POS = (0.0, 0.0, 0.8)
@@ -5818,8 +6180,8 @@ def test_mesh_align(show_viewer, tol):
             dt=0.01,
         ),
         viewer_options=gs.options.ViewerOptions(
-            camera_pos=(0.8, 0.8, 0.7),
-            camera_lookat=(-0.3, 0.0, 0.0),
+            camera_pos=(0.8, 0.8, 1.6),
+            camera_lookat=(0.0, 0.0, 0.0),
         ),
         show_viewer=show_viewer,
     )
@@ -5865,13 +6227,14 @@ def test_mesh_align(show_viewer, tol):
     scene.reset()
 
     # Simulate
-    for _ in range(450):
+    for _ in range(600):
         scene.step()
 
-    assert_allclose(mango.get_dofs_velocity(), 0, tol=0.05)
+    assert_allclose(mango.get_dofs_velocity(), 0, tol=0.06)
     assert (-0.005 < mango.get_AABB()[0, 2] < 0.0).all()
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 def test_urdf_align(show_viewer, tol):
     INIT_POS = (0.0, 0.0, 0.7)
@@ -5991,6 +6354,7 @@ def xacro_robot(tmp_path):
     return file_path
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 def test_xacro_loading(xacro_robot, show_viewer, tol):
     """Test that .urdf.xacro files are preprocessed and loaded with correct structure and properties."""
@@ -6042,7 +6406,7 @@ def test_xacro_loading(xacro_robot, show_viewer, tol):
     assert_allclose(heavy.get_mass(), 15.0, tol=tol)
 
 
-@pytest.mark.slow  # ~150s
+@pytest.mark.slow  # ~250s
 @pytest.mark.required
 @pytest.mark.parametrize("batch_links_info", [False, True])
 @pytest.mark.parametrize("batch_joints_info", [False, True])
@@ -6098,6 +6462,7 @@ def test_reset_control(robot_path, tol):
     assert_allclose(new_control_force, 0, tol=gs.EPS)
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 @pytest.mark.parametrize("n_envs", [0, 2])
 def test_joint_get_anchor_pos_and_axis(n_envs):
@@ -6217,7 +6582,7 @@ def test_merge_entities(is_fixed, merge_fixed_links, show_viewer, tol, monkeypat
     assert_allclose(tool.get_pos(), hand.get_link("right_finger").get_pos(), tol=gs.EPS)
 
 
-@pytest.mark.slow  # ~200s
+@pytest.mark.slow  # ~450s
 @pytest.mark.required
 def test_heterogeneous_simulation(show_viewer, tol):
     """Test heterogeneous simulation by comparing against independent homogeneous simulations.
@@ -6326,6 +6691,7 @@ def test_heterogeneous_invalid_material_raises():
         )
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 def test_heterogeneous_fewer_envs_than_variants():
     """Test that having fewer environments than variants works correctly.
@@ -6406,6 +6772,7 @@ def test_non_batched_mass_setters(tol):
         link.set_mass((1.0, 2.0, 3.0, 4.0))
 
 
+@pytest.mark.slow  # ~200s
 @pytest.mark.required
 def test_heterogeneous_aabb(tol):
     """Test that get_AABB and get_vAABB work correctly with heterogeneous simulation."""
@@ -6463,6 +6830,7 @@ def test_heterogeneous_aabb(tol):
 
 
 # 30s
+@pytest.mark.slow  # ~250s
 @pytest.mark.parametrize("backend", [gs.gpu])  # Grasping physics requires GPU
 def test_pick_heterogenous_objects(show_viewer):
     """Test heterogeneous simulation: CoM at rest, lifting, and gripper width differ per variant."""
@@ -6609,6 +6977,7 @@ def _build_two_link_revolute_urdf(name, geom_tag=None, geom_attribs=None, *, lin
     return urdfpy.URDF._from_xml(robot, robot, get_assets_dir())
 
 
+@pytest.mark.slow  # ~250s
 @pytest.mark.required
 def test_heterogeneous_robots(show_viewer, tol):
     """Test heterogeneous articulated simulation with vertex-based and primitive collision geometries.

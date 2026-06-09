@@ -24,6 +24,7 @@ import torch
 from httpcore import TimeoutException as HTTPTimeoutException
 from httpx import HTTPError as HTTPXError
 from huggingface_hub import snapshot_download
+from huggingface_hub.errors import LocalEntryNotFoundError
 from PIL import Image, UnidentifiedImageError
 from requests.exceptions import HTTPError
 
@@ -37,8 +38,8 @@ from genesis.utils.misc import tensor_to_array
 REPOSITY_URL = "Genesis-Embodied-AI/Genesis"
 DEFAULT_BRANCH_NAME = "main"
 
-HUGGINGFACE_ASSETS_REVISION = "13b6270d302730ca7ca77f7d40b2b2dc897978fb"
-HUGGINGFACE_SNAPSHOT_REVISION = "fe84ed8bdef4866078b9e18456be025008bfafe9"
+HUGGINGFACE_ASSETS_REVISION = "990a727788f11e34ad006c69bf769303b20cb11c"
+HUGGINGFACE_SNAPSHOT_REVISION = "620f196feb76f1b8c895eccd9a7574327e7f5663"
 
 MESH_EXTENSIONS = (".mtl", *MESH_FORMATS, *GLTF_FORMATS, *USD_FORMATS)
 IMAGE_EXTENSIONS = (".png", ".jpg")
@@ -239,7 +240,7 @@ def get_hf_dataset(
 
             if not has_files:
                 raise HTTPError("No file downloaded.")
-        except (HTTPTimeoutException, HTTPXError, HTTPError, FileNotFoundError, RuntimeError):
+        except (HTTPTimeoutException, HTTPXError, HTTPError, LocalEntryNotFoundError, FileNotFoundError, RuntimeError):
             if i == num_retry - 1:
                 raise
             print(f"Failed to download assets from HuggingFace dataset. Trying again in {retry_delay}s...")
@@ -478,8 +479,8 @@ def _get_model_mappings(
             if mj_geom.contype or mj_geom.conaffinity:
                 mj_geoms_idx.append(mj_geom.id)
 
-    (gs_joints_idx, gs_q_idx, gs_dofs_idx) = _gs_search_by_joints_name(gs_sim.scene, joints_name)
-    (_, _, gs_motors_idx) = _gs_search_by_joints_name(gs_sim.scene, motors_name)
+    gs_joints_idx, gs_q_idx, gs_dofs_idx = _gs_search_by_joints_name(gs_sim.scene, joints_name)
+    _, _, gs_motors_idx = _gs_search_by_joints_name(gs_sim.scene, motors_name)
 
     gs_bodies_idx = _gs_search_by_links_name(gs_sim.scene, bodies_name)
     gs_geoms_idx: list[int] = []
@@ -559,7 +560,6 @@ def build_genesis_sim(
             camera_lookat=(0.0, 0.0, 0.5),
             camera_fov=30,
             res=(960, 640),
-            max_FPS=60,
         ),
         sim_options=gs.options.SimOptions(
             dt=mj_sim.model.opt.timestep,
@@ -640,8 +640,8 @@ def check_mujoco_model_consistency(
 
     # Get mapping between Mujoco and Genesis
     gs_maps, mj_maps = _get_model_mappings(gs_sim, mj_sim, joints_name, bodies_name)
-    (gs_bodies_idx, gs_joints_idx, gs_q_idx, gs_dofs_idx, gs_geoms_idx, gs_motors_idx) = gs_maps
-    (mj_bodies_idx, mj_joints_idx, mj_qs_idx, mj_dofs_idx, mj_geoms_idx, mj_motors_idx) = mj_maps
+    gs_bodies_idx, gs_joints_idx, gs_q_idx, gs_dofs_idx, gs_geoms_idx, gs_motors_idx = gs_maps
+    mj_bodies_idx, mj_joints_idx, mj_qs_idx, mj_dofs_idx, mj_geoms_idx, mj_motors_idx = mj_maps
 
     # solver
     gs_gravity = gs_sim.rigid_solver.scene.gravity
@@ -816,8 +816,8 @@ def check_mujoco_data_consistency(
 ):
     # Get mapping between Mujoco and Genesis
     gs_maps, mj_maps = _get_model_mappings(gs_sim, mj_sim, joints_name, bodies_name)
-    (gs_bodies_idx, _, gs_q_idx, gs_dofs_idx, _, _) = gs_maps
-    (mj_bodies_idx, _, mj_qs_idx, mj_dofs_idx, _, _) = mj_maps
+    gs_bodies_idx, _, gs_q_idx, gs_dofs_idx, _, _ = gs_maps
+    mj_bodies_idx, _, mj_qs_idx, mj_dofs_idx, _, _ = mj_maps
 
     # crb
     gs_crb_inertial = gs_sim.rigid_solver.links_state.crb_inertial.to_numpy()[:, 0].reshape([-1, 9])[

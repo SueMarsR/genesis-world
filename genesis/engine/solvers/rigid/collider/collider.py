@@ -43,7 +43,7 @@ from .contact import (
     func_add_contact,
     func_set_contact,
     func_add_diff_contact_input,
-    func_compute_tolerance,
+    func_compute_geom_pair_scale,
     func_contact_orthogonals,
     func_rotate_frame,
     func_set_upstream_grad,
@@ -83,7 +83,7 @@ class Collider:
     def __init__(self, rigid_solver: "RigidSolver"):
         self._solver = rigid_solver
 
-        self._mc_perturbation = 1e-3 if self._solver._enable_mujoco_compatibility else 1e-2
+        self._mc_perturbation = 1e-3 if self._solver._enable_mujoco_compatibility else 2e-3
         self._mc_tolerance = 1e-3 if self._solver._enable_mujoco_compatibility else 1e-2
         self._mpr_to_gjk_overlap_ratio = 0.25
         self._box_MAXCONPAIR = 16
@@ -200,11 +200,16 @@ class Collider:
                         ):
                             has_prunable_contacts = True
 
-        # Spatial sort by x-position only runs on GPU for convex-convex scenes whose contacts could benefit from
-        # locality. Disabled when use_contact_island is True for the same reason as pruning. Also disabled in
-        # autodiff mode: the sort permutes the logical contact order via contact_sort_idx, get_contacts applies that
-        # permutation, but func_set_upstream_grad writes upstream gradients back by physical index, so a non-identity
-        # permutation would attach gradients to the wrong contacts.
+        # Spatial sort by x-position (with a geom-pair tie-break) only runs on GPU for convex-convex scenes whose
+        # contacts could benefit from locality. Disabled when use_contact_island is True for the same reason as
+        # pruning. Also disabled in autodiff mode: the sort permutes the logical contact order via contact_sort_idx,
+        # get_contacts applies that permutation, but func_set_upstream_grad writes upstream gradients back by physical
+        # index, so a non-identity permutation would attach gradients to the wrong contacts.
+        #
+        # FIXME: this sort is also what makes the contact order run-independent on GPU, where the narrowphase reserves
+        # contact slots via atomic_add and so produces a non-deterministic physical layout. When it is disabled (under
+        # autodiff, or with use_contact_island, which reads contact_data in physical order and ignores the
+        # contact_sort_idx permutation), bit-reproducible simulation is not guaranteed.
         spatial_sort_supported = (
             has_non_box_plane_convex_convex
             and gs.backend != gs.cpu
