@@ -122,16 +122,54 @@ def build_and_export(backend):
     franka.set_dofs_kp(500.0, dofs_idx_local=finger_dofs_idx)
     franka.set_dofs_kv(50.0, dofs_idx_local=finger_dofs_idx)
 
-    # 初始姿态, 静止保持
-    qpos = (2.2116, -1.5328, -0.7347, -1.7235, -1.3377, 0.7519, -1.4410, 0.04, 0.04)
-    franka.set_qpos(qpos)
-    franka.control_dofs_position(qpos)
+    motors_dof = np.arange(7)
+    fingers_dof = np.arange(7, 9)
+    ee = franka.get_link("hand")
 
-    # 布料下垂: 100 步 sample_every=2 -> 51 帧
+    # 初始姿态 -> 让夹爪悬停在布料上方
+    qpos0 = (2.2116, -1.5328, -0.7347, -1.7235, -1.3377, 0.7519, -1.4410, 0.04, 0.04)
+    franka.set_qpos(qpos0)
+
+    # 布料在 pos≈(0.5, 0, 0.1)。franka hand link 到指尖 TCP 约 0.10m, 所以要夹住
+    # 布料平面 (z≈0.10), hand 需下到 z≈0.20 让指尖恰好在布面。
+    quat_down = (0, 1, 0, 0)  # 夹爪朝下
+    q_hover = franka.inverse_kinematics(link=ee, pos=(0.5, 0.0, 0.40), quat=quat_down)
+    q_grasp = franka.inverse_kinematics(link=ee, pos=(0.5, 0.0, 0.205), quat=quat_down)
+    q_lift  = franka.inverse_kinematics(link=ee, pos=(0.5, 0.0, 0.50), quat=quat_down)
+
+    # 阶段 (总 200 步): 悬停就位20 / 下降50 / 闭合夹爪30 / 抬起80 / 保持20
+    A, B, C, D, E = 20, 50, 30, 80, 20
+    N_STEPS = A + B + C + D + E
+    OPEN, CLOSE = 0.04, 0.0
+    franka.control_dofs_position(q_hover[motors_dof], motors_dof)
+    franka.control_dofs_position(np.array([OPEN, OPEN]), fingers_dof)
+    state = {"i": 0}
+
+    def grasp_step():
+        i = state["i"]
+        if i < A:                          # 悬停就位 (夹爪张开)
+            franka.control_dofs_position(q_hover[motors_dof], motors_dof)
+            franka.control_dofs_position(np.array([OPEN, OPEN]), fingers_dof)
+        elif i < A + B:                    # 下降到布面 (仍张开)
+            franka.control_dofs_position(q_grasp[motors_dof], motors_dof)
+            franka.control_dofs_position(np.array([OPEN, OPEN]), fingers_dof)
+        elif i < A + B + C:                # 闭合夹爪抓取
+            franka.control_dofs_position(q_grasp[motors_dof], motors_dof)
+            franka.control_dofs_position(np.array([CLOSE, CLOSE]), fingers_dof)
+        elif i < A + B + C + D:            # 抬起 (保持闭合)
+            franka.control_dofs_position(q_lift[motors_dof], motors_dof)
+            franka.control_dofs_position(np.array([CLOSE, CLOSE]), fingers_dof)
+        else:                              # 保持
+            franka.control_dofs_position(q_lift[motors_dof], motors_dof)
+            franka.control_dofs_position(np.array([CLOSE, CLOSE]), fingers_dof)
+        scene.step()
+        state["i"] += 1
+
+    # 抓取过程: 200 步 sample_every=4 -> ~50 帧
     entities = [cloth1, cloth2, franka]
     colors = [[80, 50, 200], [80, 130, 200], [180, 185, 195]]
-    nf, nn, sz = export_scene_animation(MAIN, entities, colors, n_steps=100,
-                                        sample_every=2, step_fn=scene.step, fps=30.0)
+    nf, nn, sz = export_scene_animation(MAIN, entities, colors, n_steps=N_STEPS,
+                                        sample_every=4, step_fn=grasp_step, fps=30.0)
     print(f"[{NAME}] {nf}帧/{nn}实体/{sz/1024:.0f}KB")
     print(f"[{NAME}] wrote {MAIN}")
 

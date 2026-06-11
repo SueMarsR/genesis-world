@@ -101,20 +101,29 @@ def _rigid_faces(ent):
 
 def export_scene_animation(out_path, entities, colors, n_steps, sample_every,
                            step_fn, fps=30.0, point_size_hint=0.02,
-                           max_points=12000):
+                           max_points=12000, force_kinds=None):
     """
     entities:    要导出的实体列表
     colors:      与 entities 等长的 [r,g,b] (0-255) 列表
     step_fn:     callable, 推进一步仿真 (通常 scene.step)
     max_points:  点云类实体超过此数则等间隔降采样 (控制 GLB 体积; None 不降)
+    force_kinds: 可选 dict {实体索引: "points"|"mesh"|"rigid"} 覆盖自动识别。
+                 用于 MPM 弹性体: 默认有初始网格会被判 mesh, 但切开/破碎后
+                 固定拓扑会虚假连接断块, 强制 "points" 让粒子团自然分离。
     """
+    force_kinds = force_kinds or {}
     # 预取每个实体的几何类型与 faces
     metas = []
     point_idx = []  # 点云降采样索引 (与 entities 等长, 网格类为 None)
-    for ent in entities:
-        kind, faces, _ = _entity_geometry(ent)
-        if kind == "rigid":
-            faces = _rigid_faces(ent)
+    for ei, ent in enumerate(entities):
+        if ei in force_kinds:
+            kind, faces = force_kinds[ei], None
+            if kind == "rigid":
+                faces = _rigid_faces(ent)
+        else:
+            kind, faces, _ = _entity_geometry(ent)
+            if kind == "rigid":
+                faces = _rigid_faces(ent)
         metas.append((kind, faces))
         # 点云降采样: 先取一帧看数量
         if kind == "points" and max_points:
