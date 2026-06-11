@@ -52,8 +52,11 @@ def main():
 
     entities = [dragon, cutter]
     colors = [[150, 255, 200], [150, 150, 160]]  # 龙青绿 + 切刀铁灰
+    # dragon 是 MPM 弹性体: 默认有初始网格会被判 mesh, 但被切开后固定拓扑会把
+    # 分离的两半虚假连接 (物理看起来不对)。强制点云 -> 切开后两团粒子自然分离。
     nf, nn, sz = export_scene_animation(MAIN, entities, colors, n_steps=250, sample_every=5,
-                                        step_fn=scene.step, fps=30.0)
+                                        step_fn=scene.step, fps=30.0,
+                                        force_kinds={0: "points"})
     print(f"[cut_dragon] {nf}帧/{nn}实体/{sz/1024:.0f}KB")
     for d in (WT, NVME):
         os.makedirs(os.path.dirname(d), exist_ok=True); shutil.copy(MAIN, d)
